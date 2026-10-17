@@ -1,0 +1,10 @@
+{
+  "name": "one-click-handoff",
+  "displayName": "一鍵交接",
+  "version": "0.1.1",
+  "description": "Context 用到 70% 時，輸入框上方出現交接按鈕：寫交接摘要、存檔、清空對話，再把摘要當成新對話的第一句送出。",
+  "author": {
+    "name": "crytropy"
+  },
+  "types": "./types/index.d.ts"
+}

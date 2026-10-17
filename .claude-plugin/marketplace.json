@@ -1,0 +1,13 @@
+{
+  "name": "one-click-handoff",
+  "owner": {
+    "name": "crytropy"
+  },
+  "description": "Context 用到 70% 時，一鍵寫交接摘要並開新對話",
+  "plugins": [
+    {
+      "name": "one-click-handoff",
+      "source": "./"
+    }
+  ]
+}
