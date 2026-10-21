@@ -14,18 +14,25 @@ const band = (surface: 'terminal' | 'desktop', isWorking = false) => ({
   },
 })
 
-const SUMMARY = '## 目前的目標\n做一鍵交接 mod\n\n## 還沒做的\n寫 README'
+const DOC = '## 目前的目標\n做一鍵交接 mod\n\n## 建議使用的 skill\n- plugin-authoring'
 
-function world(on: any, percent: { value: number }, forkReply: any = { isAnswered: true, text: SUMMARY, usage: {} }) {
-  mock.clock(on, { now: new Date(2026, 9, 16, 14, 5, 9).getTime() })
+function world(
+  on: any,
+  percent: { value: number },
+  forkReply: any = { isAnswered: true, text: DOC, usage: {} },
+  env: Record<string, string> = { TMPDIR: '/tmp/me/' },
+) {
+  const clock = mock.clock(on, { now: new Date(2026, 9, 16, 14, 5, 9).getTime() })
   const calls: string[] = []
+  const prompts: string[] = []
   const written: { path: string; text: string }[] = []
   const submitted: string[] = []
   const toasts: string[] = []
 
   on('session.start', (_$: any, e: any) => ({ cwd: e.cwd }))
+  on('command.register', (_$: any, e: any) => ({ value: { command: e.name } }))
   on('session.cwd', () => ({ value: 'C:\\work\\my-app' }))
-  on('env.get', (_$: any, e: any) => ({ value: e.name === 'USERPROFILE' ? 'C:\\Users\\me' : undefined }))
+  on('env.get', (_$: any, e: any) => ({ value: env[e.name] }))
   on('session.usage', () => ({
     value: { startedAt: 0, context: { window: 200000, tokens: 0, percent: percent.value }, rateLimits: [] },
   }))
@@ -41,7 +48,7 @@ function world(on: any, percent: { value: number }, forkReply: any = { isAnswere
   })
   on('model.fork', (_$: any, e: any) => {
     calls.push('fork')
-    expect(e.prompt).toContain('還沒做的')
+    prompts.push(e.prompt)
     return { value: forkReply }
   })
   on('fs.write', (_$: any, e: any) => {
@@ -59,7 +66,7 @@ function world(on: any, percent: { value: number }, forkReply: any = { isAnswere
     return { text: e.text }
   })
 
-  return { calls, written, submitted, toasts }
+  return { clock, calls, prompts, written, submitted, toasts }
 }
 
 test('no button below 70% or while a turn runs', async ($, on) => {
@@ -88,18 +95,22 @@ test('no button below 70% or while a turn runs', async ($, on) => {
   }
 })
 
-test('the button summarizes, saves, clears, then sends the summary', async ($, on) => {
-  const { calls, written, submitted, toasts } = world(on, { value: 80 })
+test('the button writes the handoff doc to the temp dir, clears, then sends it', async ($, on) => {
+  const { calls, prompts, written, submitted, toasts } = world(on, { value: 80 })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
   const ui = await $.ui.mount(band('desktop'))
   await ui.press({ key: 'handoff' })
 
   expect(calls).toEqual(['fork', 'write', 'command:clear', 'submit'])
-  expect(written[0]?.path.replace(/\\/g, '/')).toBe('C:/Users/me/.claude/handoffs/my-app-20261016-140509.md')
-  expect(written[0]?.text).toContain(SUMMARY)
-  expect(submitted[0]).toContain('C:/Users/me/.claude/handoffs/my-app-20261016-140509.md')
-  expect(submitted[0]).toContain(SUMMARY)
+  expect(prompts[0]).toContain('建議使用的 skill')
+  expect(prompts[0]).toContain('敏感資訊')
+  expect(prompts[0]).not.toContain('下一段對話要做的是')
+  // The engine resolves the written path for this OS; the plugin's own path is in the prompt.
+  expect(written[0]?.path.replace(/\\/g, '/')).toEndWith('/tmp/me/handoff-my-app-20261016-140509.md')
+  expect(written[0]?.text).toBe(`${DOC}\n`)
+  expect(submitted[0]).toContain('/tmp/me/handoff-my-app-20261016-140509.md')
+  expect(submitted[0]).toContain(DOC)
   expect(toasts.at(-1)).toContain('交接完成')
   await ui.unmount()
 
@@ -107,6 +118,28 @@ test('the button summarizes, saves, clears, then sends the summary', async ($, o
   const after = await $.ui.mount(band('desktop'))
   expect(await after.find({ key: 'handoff' })).toBeUndefined()
   await after.unmount()
+})
+
+test('without TMPDIR the doc goes to %TEMP%', async ($, on) => {
+  const { submitted } = world(on, { value: 80 }, undefined, { TEMP: 'C:\\Users\\me\\AppData\\Local\\Temp' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  const ui = await $.ui.mount(band('terminal'))
+  await ui.press({ key: 'handoff' })
+  expect(submitted[0]).toContain('C:/Users/me/AppData/Local/Temp/handoff-my-app-20261016-140509.md')
+  await ui.unmount()
+})
+
+test('the command hands off with what the next session is for', async ($, on) => {
+  const { clock, calls, prompts } = world(on, { value: 10 })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  const { text } = await $.command.run({ command: 'one-click-handoff', args: ' 寫 README ' })
+  expect(text).toBe('開始交接…')
+  await clock.settle()
+
+  expect(calls).toEqual(['fork', 'write', 'command:clear', 'submit'])
+  expect(prompts[0]).toContain('下一段對話要做的是：寫 README\n')
 })
 
 test('a failed summary clears nothing and offers a retry', async ($, on) => {

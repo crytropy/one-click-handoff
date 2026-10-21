@@ -1,7 +1,15 @@
 # one-click-handoff
 一鍵交接
 
-Context 用到 70% 時，輸入框上方出現「一鍵交接」按鈕：請模型寫一份交接摘要、存到 `~/.claude/handoffs/`、清空對話，再把摘要當成新對話的第一句送出。
+Context 用到 70% 時，輸入框上方出現「一鍵交接」按鈕：請模型寫一份交接文件、存到系統的暫存資料夾（`$TMPDIR`，沒有就用 Windows 的 `%TEMP%`，再沒有就用 `/tmp`）、清空對話，再把文件當成新對話的第一句送出。
+
+也可以隨時輸入 `/one-click-handoff 下一段要做什麼`，交接文件會依你寫的方向調整。
+
+交接文件的寫法照 [mattpocock/skills 的 handoff skill](https://github.com/mattpocock/skills/blob/main/skills/productivity/handoff/SKILL.md)：
+
+- 寫一節「建議使用的 skill」，列出下一段對話該用哪些 skill。
+- 已經記在其他地方的內容（規格、計畫、ADR、issue、commit、diff）不重複寫，改用路徑或網址指過去。
+- 遮掉 API key、密碼、個人身分資訊等敏感資訊。
 
 ## 安裝（本機）
 
@@ -25,7 +33,7 @@ Context 用到 70% 時，輸入框上方出現「一鍵交接」按鈕：請模�
 
 ## 雲端 session（未驗證）
 
-> ⚠️ 這個做法還沒實際驗證過，雲端介面也不一定會畫出輸入框上方的按鈕。另外，雲端 session 不支援 `/clear`，交接流程裡的「清空對話」那一步可能會失敗；交接摘要也會存在雲端主機上，不會存到你的電腦。
+> ⚠️ 這個做法還沒實際驗證過，雲端介面也不一定會畫出輸入框上方的按鈕。另外，雲端 session 不支援 `/clear`，交接流程裡的「清空對話」那一步可能會失敗；交接文件也會存在雲端主機的暫存資料夾，不會存到你的電腦。
 
 雲端 session 跑在雲端環境（environment）裡，環境和 repo 是分開選的。設定一次環境，用這個環境開的雲端 session 都會套用，不管開在哪個 repo。在 claude.ai/code 的環境設定裡：
 
