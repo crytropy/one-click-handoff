@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Phase } from '../types'
+import type { Phase, Written } from '../types'
 
 const SHOW_AT_PERCENT = 70
 
@@ -22,6 +22,7 @@ const handoffPrompt = (focus: string) =>
 const contextPercent = atom({ plugin: 'one-click-handoff', key: 'contextPercent' } as const, null as number | null)
 const phase = atom({ plugin: 'one-click-handoff', key: 'phase' } as const, 'idle' as Phase)
 const failure = atom({ plugin: 'one-click-handoff', key: 'failure' } as const, null as string | null)
+const written = atom({ plugin: 'one-click-handoff', key: 'written' } as const, null as Written | null)
 
 async function refresh($: EngineInterface): Promise<void> {
   try {
@@ -59,6 +60,7 @@ async function handoff($: EngineInterface, focus = ''): Promise<void> {
   if (await isRunning($)) return
 
   await update($, failure, () => null)
+  await update($, written, () => null)
   await update($, phase, () => 'summarizing')
 
   try {
@@ -72,18 +74,41 @@ async function handoff($: EngineInterface, focus = ''): Promise<void> {
     const path = await handoffPath($)
     await $.fs.write(path, `${doc}\n`)
 
-    await update($, phase, () => 'clearing')
-    await $.command.run({ command: 'clear' })
-    await $.prompt.submit({
-      text: `這是上一段對話的交接文件（已存成 ${path}）。請先讀完，再接續還沒做的工作；有不清楚的地方先問我。\n\n${doc}`,
-    })
-
-    await update($, contextPercent, () => null)
-    await update($, phase, () => 'idle')
-    $.ui.toast(`交接完成，交接文件存在 ${path}`)
+    // Clearing is the person's call: ask beside the prompt.
+    await update($, written, () => ({ path, doc }))
+    await update($, phase, () => 'asking')
+    $.ui.toast(`交接文件存在 ${path}`)
   } catch (error) {
     await fail($, error instanceof Error ? error.message : String(error))
   }
+}
+
+async function clearAndContinue($: EngineInterface): Promise<void> {
+  const doc = await read($, written)
+  if (doc === null || (await isRunning($))) return
+
+  await update($, failure, () => null)
+  await update($, phase, () => 'clearing')
+
+  try {
+    await $.command.run({ command: 'clear' })
+    await $.prompt.submit({
+      text: `這是上一段對話的交接文件（已存成 ${doc.path}）。請先讀完，再接續還沒做的工作；有不清楚的地方先問我。\n\n${doc.doc}`,
+    })
+
+    await update($, written, () => null)
+    await update($, contextPercent, () => null)
+    await update($, phase, () => 'idle')
+    $.ui.toast('已清空對話，交接文件送進新對話')
+  } catch (error) {
+    await fail($, error instanceof Error ? error.message : String(error))
+  }
+}
+
+// Keep the conversation; the doc stays where it was saved.
+async function keep($: EngineInterface): Promise<void> {
+  await update($, written, () => null)
+  await update($, phase, () => 'idle')
 }
 
 export const register: Register = on => {
@@ -100,9 +125,9 @@ export const register: Register = on => {
 
   on('command.run', { command: COMMAND }, async ($, e) => {
     if (await isRunning($)) return { text: '交接已經在進行中' }
-    // Not awaited: the /clear it runs only starts once this command has ended.
+    // Not awaited: writing the doc takes a while, and the band shows how it goes.
     void handoff($, e.args.trim())
-    return { text: '開始交接…' }
+    return { text: '開始寫交接文件…' }
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -131,14 +156,29 @@ export const register: Register = on => {
     let mine = null
     if (now === 'summarizing') {
       mine = <Text color="warning">一鍵交接：正在寫交接文件…</Text>
+    } else if (now === 'asking') {
+      mine = [
+        <Text key="why" color="warning">
+          交接文件寫好了，要清空對話，把文件送進新對話嗎？{' '}
+        </Text>,
+        <Button key="clear" label="清空並接續" variant="primary" onPress={() => clearAndContinue($)} />,
+        <Text key="gap"> </Text>,
+        <Button key="keep" label="先不要" onPress={() => keep($)} />,
+      ]
     } else if (now === 'clearing') {
       mine = <Text color="warning">一鍵交接：清空對話，送出交接文件…</Text>
     } else if (now === 'failed') {
+      // A failed clear retries the clear; anything else writes the doc again.
+      const canClear = (await read($, written)) !== null
       mine = [
         <Text key="why" color="error">
           交接失敗：{(await read($, failure)) ?? '不明原因'}{' '}
         </Text>,
-        <Button key="handoff" label="重試交接" onPress={() => handoff($)} />,
+        canClear ? (
+          <Button key="clear" label="重試清空" onPress={() => clearAndContinue($)} />
+        ) : (
+          <Button key="handoff" label="重試交接" onPress={() => handoff($)} />
+        ),
       ]
     } else if (percent !== null && percent >= SHOW_AT_PERCENT && !e.props.isWorking) {
       mine = [

@@ -2,7 +2,7 @@
   "name": "one-click-handoff",
   "displayName": "一鍵交接",
   "version": "0.2.0",
-  "description": "Context 用到 70% 時，輸入框上方出現交接按鈕：寫交接文件、存到暫存資料夾、清空對話，再把文件當成新對話的第一句送出。",
+  "description": "Context 用到 70% 時，輸入框上方出現交接按鈕：寫交接文件、存到暫存資料夾，再問要不要清空對話、把文件當成新對話的第一句送出。",
   "author": {
     "name": "crytropy"
   },

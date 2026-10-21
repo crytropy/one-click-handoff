@@ -25,6 +25,7 @@ function world(
   const clock = mock.clock(on, { now: new Date(2026, 9, 16, 14, 5, 9).getTime() })
   const calls: string[] = []
   const prompts: string[] = []
+  const clear = { fails: false }
   const written: { path: string; text: string }[] = []
   const submitted: string[] = []
   const toasts: string[] = []
@@ -58,6 +59,7 @@ function world(
   })
   on('command.run', (_$: any, e: any) => {
     calls.push(`command:${e.command}`)
+    if (clear.fails) throw new Error('clear refused')
     return { text: '' }
   })
   on('prompt.submit', (_$: any, e: any) => {
@@ -66,7 +68,7 @@ function world(
     return { text: e.text }
   })
 
-  return { clock, calls, prompts, written, submitted, toasts }
+  return { clock, clear, calls, prompts, written, submitted, toasts }
 }
 
 test('no button below 70% or while a turn runs', async ($, on) => {
@@ -95,51 +97,112 @@ test('no button below 70% or while a turn runs', async ($, on) => {
   }
 })
 
-test('the button writes the handoff doc to the temp dir, clears, then sends it', async ($, on) => {
+test('the button writes the handoff doc to the temp dir, then asks before clearing', async ($, on) => {
   const { calls, prompts, written, submitted, toasts } = world(on, { value: 80 })
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
   const ui = await $.ui.mount(band('desktop'))
   await ui.press({ key: 'handoff' })
+  await ui.unmount()
 
-  expect(calls).toEqual(['fork', 'write', 'command:clear', 'submit'])
+  expect(calls).toEqual(['fork', 'write'])
   expect(prompts[0]).toContain('建議使用的 skill')
   expect(prompts[0]).toContain('敏感資訊')
   expect(prompts[0]).not.toContain('下一段對話要做的是')
-  // The engine resolves the written path for this OS; the plugin's own path is in the prompt.
+  // The engine resolves the written path for this OS; the plugin's own path is in the toast.
   expect(written[0]?.path.replace(/\\/g, '/')).toEndWith('/tmp/me/handoff-my-app-20261016-140509.md')
   expect(written[0]?.text).toBe(`${DOC}\n`)
+  expect(toasts.at(-1)).toContain('/tmp/me/handoff-my-app-20261016-140509.md')
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const asking = await $.ui.mount(band(surface))
+    expect(await asking.find({ key: 'handoff' })).toBeUndefined()
+    expect(await asking.find({ key: 'keep' })).toBeDefined()
+    expect((await asking.find({ key: 'clear' }))?.text).toBe('清空並接續')
+    expect(await asking.find({ type: 'Text', text: 'beneath' })).toBeDefined()
+    await asking.unmount()
+  }
+
+  const choice = await $.ui.mount(band('desktop'))
+  await choice.press({ key: 'clear' })
+  await choice.unmount()
+
+  expect(calls).toEqual(['fork', 'write', 'command:clear', 'submit'])
   expect(submitted[0]).toContain('/tmp/me/handoff-my-app-20261016-140509.md')
   expect(submitted[0]).toContain(DOC)
-  expect(toasts.at(-1)).toContain('交接完成')
-  await ui.unmount()
 
   // The context reading is gone after the handoff: no button until the next turn.
   const after = await $.ui.mount(band('desktop'))
   expect(await after.find({ key: 'handoff' })).toBeUndefined()
+  expect(await after.find({ key: 'clear' })).toBeUndefined()
   await after.unmount()
 })
 
-test('without TMPDIR the doc goes to %TEMP%', async ($, on) => {
-  const { submitted } = world(on, { value: 80 }, undefined, { TEMP: 'C:\\Users\\me\\AppData\\Local\\Temp' })
+test('declining keeps the conversation and the saved doc', async ($, on) => {
+  const { calls } = world(on, { value: 80 })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
 
   const ui = await $.ui.mount(band('terminal'))
   await ui.press({ key: 'handoff' })
-  expect(submitted[0]).toContain('C:/Users/me/AppData/Local/Temp/handoff-my-app-20261016-140509.md')
+  await ui.unmount()
+
+  const choice = await $.ui.mount(band('terminal'))
+  await choice.press({ key: 'keep' })
+  await choice.unmount()
+  expect(calls).toEqual(['fork', 'write'])
+
+  // Still past 70%: the handoff button is back.
+  const after = await $.ui.mount(band('terminal'))
+  expect(await after.find({ key: 'handoff' })).toBeDefined()
+  expect(await after.find({ key: 'clear' })).toBeUndefined()
+  await after.unmount()
+})
+
+test('a failed clear keeps the doc and retries the clear', async ($, on) => {
+  const { calls, clear } = world(on, { value: 80 })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  const ui = await $.ui.mount(band('terminal'))
+  await ui.press({ key: 'handoff' })
+  await ui.unmount()
+
+  clear.fails = true
+  const choice = await $.ui.mount(band('terminal'))
+  await choice.press({ key: 'clear' })
+  await choice.unmount()
+
+  clear.fails = false
+  const retry = await $.ui.mount(band('terminal'))
+  expect((await retry.find({ key: 'clear' }))?.text).toBe('重試清空')
+  await retry.press({ key: 'clear' })
+  await retry.unmount()
+  expect(calls).toEqual(['fork', 'write', 'command:clear', 'command:clear', 'submit'])
+})
+
+test('without TMPDIR the doc goes to %TEMP%', async ($, on) => {
+  const { toasts } = world(on, { value: 80 }, undefined, { TEMP: 'C:\\Users\\me\\AppData\\Local\\Temp' })
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+  const ui = await $.ui.mount(band('terminal'))
+  await ui.press({ key: 'handoff' })
+  expect(toasts.at(-1)).toContain('C:/Users/me/AppData/Local/Temp/handoff-my-app-20261016-140509.md')
   await ui.unmount()
 })
 
-test('the command hands off with what the next session is for', async ($, on) => {
+test('the command writes the doc for what the next session is for', async ($, on) => {
   const { clock, calls, prompts } = world(on, { value: 10 })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
 
   const { text } = await $.command.run({ command: 'one-click-handoff', args: ' 寫 README ' })
-  expect(text).toBe('開始交接…')
+  expect(text).toBe('開始寫交接文件…')
   await clock.settle()
 
-  expect(calls).toEqual(['fork', 'write', 'command:clear', 'submit'])
+  expect(calls).toEqual(['fork', 'write'])
   expect(prompts[0]).toContain('下一段對話要做的是：寫 README\n')
+
+  const asking = await $.ui.mount(band('terminal'))
+  expect(await asking.find({ key: 'clear' })).toBeDefined()
+  await asking.unmount()
 })
 
 test('a failed summary clears nothing and offers a retry', async ($, on) => {
